@@ -15,15 +15,28 @@
 - name: create traefik directory
   become: true
   file:
-    path: '{{ item }}'
+    path: "{{ traefik_dir }}"
     state: directory
     owner: root
     group: docker
     mode: 0550
-  loop:
-    - "{{ traefik_dir }}"
-  loop_control:
-    label: "{{ item }}"
+  tags:
+    - configuration
+
+- name: check acme.json
+  stat:
+    path: "{{ traefik_dir }}/acme.json"
+  register: acme_exist
+  
+- name: create ssl acme.json
+  become: true
+  file:
+    path: "{{ traefik_dir }}/acme.json"
+    state: touch
+    owner: root
+    group: docker
+    mode: 0600
+  when: not acme_exist.stat.exists
   tags:
     - configuration
 
@@ -49,18 +62,29 @@
     published_ports:
       - '80:80'
       - '443:443'
+      - '8082:8082' #/metrics for prom
+      - "8080:8080" #dashboard
     #   env:
     #     CF_API_EMAIL: "{{ traefik_dnschallenge_env.CF_API_EMAIL }}"
     #     CF_API_KEY: "{{ traefik_dnschallenge_env.CF_API_KEY }}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - "{{ traefik_dir }}/traefik.toml:/etc/traefik/traefik.toml"
+      - "{{ traefik_dir }}/acme.json/:/acme.json"
       - /var/run/docker.sock:/var/run/docker.sock
-      - traefik-data:/etc/traefik
     capabilities:
       - net_bind_service
     networks:
       - name: '{{ traefik_network }}'
     networks_cli_compatible: false
+    labels:
+      traefik.enable: "true"
+      # Add prom metrics
+      traefik.http.routers.traefik_metrics.rule: "PathPrefix(`/metrics`)"
+      traefik.http.routers.traefik_metrics.entrypoints: "metrics"
+      traefik.http.routers.traefik_metrics.service: "prometheus@internal"
+      # And show them only to these white IPs
+      traefik.http.middlewares.white-ips-for-monitoring.ipwhitelist.sourcerange: "{{ traefik_metrics_white_ips }}"
+      traefik.http.routers.traefik_metrics.middlewares: "white-ips-for-monitoring@docker"
   tags:
     - configuration
